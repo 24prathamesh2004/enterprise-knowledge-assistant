@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enterprise Knowledge Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Enterprise Knowledge Assistant</h1>
+      <p class="sub">Ask a question about company policies. Answers are grounded in the knowledge base and scored with RAGAS.</p>
+    </header>
+
+    <form id="ask-form">
+      <textarea id="question" rows="3" placeholder="e.g. How many paid leave days do I get per year?" required></textarea>
+      <button type="submit" id="submit-btn">Ask</button>
+    </form>
+
+    <section id="result" class="result hidden">
+      <div class="block">
+        <h2>Answer</h2>
+        <p id="answer"></p>
+      </div>
+
+      <div class="block">
+        <h2>RAGAS evaluation</h2>
+        <p id="summary" class="summary"></p>
+        <div id="scores" class="scores"></div>
+      </div>
+
+      <div class="block">
+        <h2>Trace</h2>
+        <div id="trace" class="trace"></div>
+        <p id="escalation" class="escalation hidden"></p>
+      </div>
+    </section>
+
+    <p id="loading" class="loading hidden">Thinking…</p>
+    <p id="error" class="error hidden"></p>
+
+    <footer>Local demo · 127.0.0.1 · no authentication</footer>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

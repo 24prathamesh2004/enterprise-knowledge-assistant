@@ -1,0 +1,62 @@
+[
+  {
+    "question": "How many days of paid annual leave do full-time employees get each year?",
+    "reference": "Full-time employees are entitled to 22 days of paid annual leave per calendar year, accrued at 1.83 days per completed month of service.",
+    "source": "leave-policy.md"
+  },
+  {
+    "question": "How much paid parental leave does the primary caregiver receive?",
+    "reference": "The primary caregiver receives 16 weeks of fully paid parental leave, which must be taken within 12 months of the birth or adoption.",
+    "source": "leave-policy.md"
+  },
+  {
+    "question": "How many days per week can eligible employees work remotely?",
+    "reference": "Eligible employees may work remotely up to 3 days per week, with a minimum of 2 days per week on-site.",
+    "source": "remote-work-policy.md"
+  },
+  {
+    "question": "When do employees become eligible for remote work?",
+    "reference": "Employees become eligible for remote work after completing their first 90 days of employment, subject to satisfactory performance and a remote-compatible role.",
+    "source": "remote-work-policy.md"
+  },
+  {
+    "question": "What is the deadline to submit an expense claim?",
+    "reference": "Expense claims must be submitted through the Expense Portal within 30 days of the date the expense was incurred; claims older than 90 days are never reimbursed.",
+    "source": "expense-reimbursement-policy.md"
+  },
+  {
+    "question": "How often must passwords be rotated?",
+    "reference": "Account passwords must be rotated every 90 days and must be at least 14 characters long.",
+    "source": "it-security-policy.md"
+  },
+  {
+    "question": "Is multi-factor authentication required at Northwind?",
+    "reference": "Yes, multi-factor authentication (MFA) is mandatory for all Northwind systems, including email, VPN, code repositories, and cloud consoles.",
+    "source": "it-security-policy.md"
+  },
+  {
+    "question": "What is the company 401(k) match?",
+    "reference": "Northwind matches 401(k) contributions at 100% of the first 5% of eligible salary contributed, and the employer match is immediately vested.",
+    "source": "benefits-policy.md"
+  },
+  {
+    "question": "How far in advance must business flights be booked?",
+    "reference": "Flights and hotels must be booked through the Northwind Travel Portal at least 14 days in advance; bookings with less than 14 days notice require Director approval.",
+    "source": "travel-policy.md"
+  },
+  {
+    "question": "How quickly must a personal-data breach be reported to the supervisory authority?",
+    "reference": "The Data Protection Office must notify the relevant supervisory authority within 72 hours of becoming aware of a personal-data breach.",
+    "source": "data-privacy-policy.md"
+  },
+  {
+    "question": "What approval is needed for a purchase over $5,000?",
+    "reference": "Purchases over $5,000 require VP approval, and purchases over $50,000 require both VP and CFO approval.",
+    "source": "procurement-policy.md"
+  },
+  {
+    "question": "When must an employee disclose a business gift they received?",
+    "reference": "Any gift or entertainment valued over $100 must be disclosed to Legal & Compliance and recorded in the Gifts Register; cash or cash-equivalent gifts are never permitted.",
+    "source": "code-of-conduct.md"
+  }
+]

@@ -1,0 +1,31 @@
+# --- Secrets (never commit) ---
+.env
+*.env
+!.env.example
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Vector store & local data artifacts ---
+.chroma/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- HuggingFace / model caches ---
+.cache/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,96 @@
+:root {
+  --bg: #0f1115;
+  --panel: #1a1d24;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --muted: #9aa4b2;
+  --accent: #4f8cff;
+  --good: #35c07a;
+  --warn: #e0a94f;
+  --bad: #e0574f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 20px 60px;
+}
+
+header h1 { margin: 0 0 6px; font-size: 1.6rem; }
+.sub { color: var(--muted); margin: 0 0 24px; }
+
+#ask-form { display: flex; flex-direction: column; gap: 12px; }
+
+textarea {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 12px;
+  font-size: 1rem;
+  resize: vertical;
+}
+
+button {
+  align-self: flex-start;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 22px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.55; cursor: default; }
+
+.result { margin-top: 28px; display: flex; flex-direction: column; gap: 18px; }
+.block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.block h2 { margin: 0 0 10px; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+#answer { white-space: pre-wrap; margin: 0; }
+
+.summary { margin: 0 0 12px; font-style: italic; color: var(--muted); }
+.scores { display: flex; flex-wrap: wrap; gap: 10px; }
+.score {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 120px;
+}
+.score .label { font-size: 0.75rem; color: var(--muted); display: block; }
+.score .val { font-size: 1.2rem; font-weight: 600; }
+.val.good { color: var(--good); }
+.val.warn { color: var(--warn); }
+.val.bad { color: var(--bad); }
+
+.trace { display: flex; flex-wrap: wrap; gap: 6px; }
+.node {
+  background: #232732;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.escalation { margin: 12px 0 0; color: var(--warn); }
+.loading { color: var(--muted); }
+.error { color: var(--bad); }
+.hidden { display: none; }
+
+footer { margin-top: 40px; color: var(--muted); font-size: 0.8rem; text-align: center; }
