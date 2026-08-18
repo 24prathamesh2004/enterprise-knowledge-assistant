@@ -1,8 +1,11 @@
 """Custom MCP server — Northwind "Enterprise Service Desk".
 
-Exposes ticketing + interaction-audit tools over stdio, backed by a local
-SQLite database. Runs standalone (`python mcp_server/server.py`) and is kept
-free of project imports so it works when spawned as a subprocess by the client.
+Exposes two tools over stdio, backed by a local SQLite database:
+  - log_interaction: audit every assistant answer (called on every run)
+  - create_ticket:   escalate a low-confidence / rejected query to a human
+
+Runs standalone (`python mcp_server.py`) and imports nothing from the project so
+it works when the client spawns it as a subprocess.
 """
 from __future__ import annotations
 
@@ -54,29 +57,6 @@ def create_ticket(summary: str, category: str = "general", priority: str = "norm
             (ticket_id, summary, category, priority, "open", _now()),
         )
     return {"ticket_id": ticket_id, "status": "open"}
-
-
-@mcp.tool()
-def get_ticket(ticket_id: str) -> dict:
-    """Fetch a single ticket by id."""
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM tickets WHERE ticket_id = ?", (ticket_id,)
-        ).fetchone()
-    return dict(row) if row else {"error": f"Ticket {ticket_id} not found"}
-
-
-@mcp.tool()
-def list_tickets(status: str = "open") -> list:
-    """List tickets, optionally filtered by status ('open', 'closed', or 'all')."""
-    query, params = "SELECT * FROM tickets", ()
-    if status and status != "all":
-        query += " WHERE status = ?"
-        params = (status,)
-    query += " ORDER BY created_at DESC"
-    with _conn() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
 
 
 @mcp.tool()

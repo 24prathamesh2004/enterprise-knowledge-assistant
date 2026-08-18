@@ -1,1 +1,0 @@
-"""Enterprise Knowledge Assistant package."""

@@ -1,8 +1,9 @@
-"""Run RAGAS metrics on a single (question, answer, contexts) sample and turn
-the scores into plain-language interpretation.
+"""RAGAS evaluation for one (question, answer, contexts) sample, plus a
+plain-language interpretation of the scores.
 
-RAGAS and the heavy model wrappers are imported lazily inside ``run_ragas`` so
-the pure ``interpret_scores`` helper (and its unit tests) stay import-light.
+`interpret_scores` is a pure function (no heavy imports) so it stays easy to
+test. `run_ragas` imports RAGAS lazily and never raises — on any failure it
+returns NaN scores so the graph keeps running.
 """
 from __future__ import annotations
 
@@ -34,8 +35,7 @@ def interpret_scores(scores: dict) -> str:
             shown = "nan" if _is_nan(val) else f"{val:.2f}"
             lines.append(f"- {key}: {shown} — {_label(val)}")
 
-    faith = scores.get("faithfulness")
-    rel = scores.get("answer_relevancy")
+    faith, rel = scores.get("faithfulness"), scores.get("answer_relevancy")
     if _is_nan(faith) or _is_nan(rel):
         summary = "Evaluation incomplete — treat the answer with caution."
     elif faith >= 0.70 and rel >= 0.70:
@@ -49,29 +49,23 @@ def interpret_scores(scores: dict) -> str:
 
 
 def _load_metrics(with_reference: bool):
-    """Import metric classes defensively across RAGAS versions."""
+    """Import metric classes defensively (names differ across RAGAS versions)."""
     from ragas.metrics import Faithfulness
 
     try:
         from ragas.metrics import ResponseRelevancy as AnswerRel
-    except ImportError:  # naming differs across versions
+    except ImportError:
         from ragas.metrics import AnswerRelevancy as AnswerRel
 
     metrics = [Faithfulness(), AnswerRel()]
     if with_reference:
-        try:
-            from ragas.metrics import (
-                LLMContextPrecisionWithReference,
-                LLMContextRecall,
-            )
+        from ragas.metrics import LLMContextPrecisionWithReference, LLMContextRecall
 
-            metrics += [LLMContextPrecisionWithReference(), LLMContextRecall()]
-        except ImportError:
-            pass
+        metrics += [LLMContextPrecisionWithReference(), LLMContextRecall()]
     return metrics
 
 
-def _normalize(col: str):
+def _normalize(col: str) -> str | None:
     """Map a RAGAS result column to our canonical metric key (robust to renames)."""
     c = col.lower()
     if "faith" in c:
@@ -86,19 +80,18 @@ def _normalize(col: str):
 
 
 def _ensure_ragas_importable() -> None:
-    """Shim the removed ``langchain_community.chat_models.vertexai`` path.
+    """Stub the removed `langchain_community.chat_models.vertexai` path.
 
-    ragas 0.4.x imports ``ChatVertexAI`` (and ``VertexAI``) unconditionally at
-    module load, but langchain-community 0.4+ dropped that submodule. We never
-    use Vertex, so registering lightweight stubs lets ``import ragas`` succeed.
-    Idempotent and only fills in what's actually missing.
+    RAGAS imports ChatVertexAI at module load, but langchain-community 0.4+
+    dropped that submodule. We never use Vertex, so registering a lightweight
+    stub lets `import ragas` succeed. Idempotent; no-ops if the real module exists.
     """
     import sys
     import types
 
     mod_name = "langchain_community.chat_models.vertexai"
     if mod_name not in sys.modules:
-        try:  # real module wins if a compatible version is installed
+        try:
             __import__(mod_name)
         except Exception:
             stub = types.ModuleType(mod_name)
@@ -114,31 +107,29 @@ def _ensure_ragas_importable() -> None:
 
 
 def run_ragas(question, answer, contexts, reference=None) -> dict:
-    """Evaluate one sample with RAGAS. Never raises; returns NaN + _error on failure.
-
-    Context precision/recall run only when a reference is supplied.
-    """
-    base = {"faithfulness": float("nan"), "answer_relevancy": float("nan")}
+    """Evaluate one sample with RAGAS. Context precision/recall run only when a
+    reference is supplied. Never raises: returns NaN (+ _error) on failure."""
+    scores = {"faithfulness": float("nan"), "answer_relevancy": float("nan")}
     try:
         import nest_asyncio
+
         nest_asyncio.apply()
         _ensure_ragas_importable()
         from ragas import evaluate
         from ragas.embeddings import LangchainEmbeddingsWrapper
         from ragas.llms import LangchainLLMWrapper
+
         try:
             from ragas import EvaluationDataset, SingleTurnSample
         except ImportError:
             from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
 
-        from ..config import JUDGE_MODEL, make_chat_llm
-        from ..rag.vectorstore import get_embeddings
+        from config import JUDGE_MODEL, make_llm
+        from rag import get_embeddings
 
-        # Faithfulness emits one NLI verdict + reason per extracted statement,
-        # so its structured JSON is far larger than answer-relevancy's short
-        # question list. A 1024 cap truncated that JSON → instructor parse
-        # failure → NaN for faithfulness only. 4096 leaves ample headroom.
-        judge = LangchainLLMWrapper(make_chat_llm(JUDGE_MODEL, max_tokens=4096))
+        # bypass_n: Groq's chat API rejects n>1, but answer_relevancy asks for
+        # 3 question generations. This fans them out into 3 separate n=1 calls.
+        judge = LangchainLLMWrapper(make_llm(JUDGE_MODEL, max_tokens=4096), bypass_n=True)
         embeddings = LangchainEmbeddingsWrapper(get_embeddings())
         sample = SingleTurnSample(
             user_input=question,
@@ -146,18 +137,21 @@ def run_ragas(question, answer, contexts, reference=None) -> dict:
             retrieved_contexts=list(contexts),
             reference=reference,
         )
-        dataset = EvaluationDataset(samples=[sample])
-        metrics = _load_metrics(with_reference=bool(reference))
-        result = evaluate(dataset=dataset, metrics=metrics, llm=judge, embeddings=embeddings)
+        result = evaluate(
+            dataset=EvaluationDataset(samples=[sample]),
+            metrics=_load_metrics(with_reference=bool(reference)),
+            llm=judge,
+            embeddings=embeddings,
+        )
         df = result.to_pandas()
         for col in df.columns:
-            name = _normalize(col)
-            if name is not None:
+            key = _normalize(col)
+            if key is not None:
                 try:
-                    base[name] = float(df[col].mean())
+                    scores[key] = float(df[col].mean())
                 except (TypeError, ValueError):
                     continue
-        return base
-    except Exception as exc:  # keep the graph alive
-        base["_error"] = str(exc)
-        return base
+        return scores
+    except Exception as exc:  # eval must never break the graph
+        scores["_error"] = str(exc)
+        return scores

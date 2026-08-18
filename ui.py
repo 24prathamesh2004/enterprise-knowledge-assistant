@@ -2,26 +2,23 @@
 
 Local demo only: binds to 127.0.0.1 with NO authentication. Do not expose this
 to a network without adding access controls.
+
+  python ui.py   ->   http://127.0.0.1:5000
 """
 from __future__ import annotations
 
 import math
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from flask import Flask, jsonify, render_template, request
 
-from flask import Flask, jsonify, render_template, request  # noqa: E402
-
-from eka.graph import build_graph  # noqa: E402
+from graph import build_graph
 
 app = Flask(__name__)
 _graph = build_graph()
 
 
 def _json_safe(obj):
-    """Recursively replace non-finite floats (NaN/inf) with None so the payload
-    is valid JSON — RAGAS emits NaN when a metric can't be computed."""
+    """Replace non-finite floats (RAGAS emits NaN) with None so it's valid JSON."""
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
     if isinstance(obj, dict):
