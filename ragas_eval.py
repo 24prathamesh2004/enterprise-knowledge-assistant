@@ -1,136 +1,119 @@
-"""RAGAS evaluation for one (question, answer, contexts) sample, plus a
-plain-language interpretation of the scores.
+"""RAGAS evaluation and score interpretation."""
 
-`interpret_scores` is a pure function (no heavy imports) so it stays easy to
-test. `run_ragas` imports RAGAS lazily and never raises — on any failure it
-returns NaN scores so the graph keeps running.
-"""
-from __future__ import annotations
-
+import logging
 import math
+import nest_asyncio
+from ragas import evaluate, EvaluationDataset, SingleTurnSample
+from ragas.embeddings import LangchainEmbeddingsWrapper
+from ragas.llms import LangchainLLMWrapper
+from ragas.metrics import Faithfulness
+from ragas.run_config import RunConfig
+from config import JUDGE_MODEL, EMBED_MODEL, make_llm
+from rag import get_embeddings
 
-_METRIC_ORDER = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+# RAGAS renamed a few metrics across versions; support both.
+try:
+    from ragas.metrics import ResponseRelevancy as AnswerRelevancy
+except ImportError:
+    from ragas.metrics import AnswerRelevancy
+
+try:
+    from ragas.metrics import LLMContextPrecisionWithReference, LLMContextRecall
+    HAS_REFERENCE_METRICS = True
+except ImportError:
+    HAS_REFERENCE_METRICS = False
+
+nest_asyncio.apply()
+
+METRIC_ORDER = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
 
 
-def _is_nan(v) -> bool:
-    return v is None or (isinstance(v, float) and math.isnan(v))
+class RAGASEmbeddings:
+    """Adapt LocalEmbeddings to what RAGAS expects (it reads ``model_name``)."""
 
+    def __init__(self, embeddings):
+        self.embeddings = embeddings
+        self.model_name = getattr(embeddings, "model_name", EMBED_MODEL)
 
-def _label(v: float) -> str:
-    if _is_nan(v):
-        return "n/a (eval unavailable)"
-    if v >= 0.80:
-        return "strong"
-    if v >= 0.60:
-        return "acceptable (minor gaps)"
-    return "weak"
+    def embed_documents(self, texts):
+        return self.embeddings.embed_documents(texts)
+
+    def embed_query(self, text):
+        return self.embeddings.embed_query(text)
+
+    def __str__(self):
+        return self.model_name
 
 
 def interpret_scores(scores: dict) -> str:
-    """Map RAGAS scores to a short, human-readable interpretation."""
-    lines: list[str] = []
-    for key in _METRIC_ORDER:
-        if key in scores:
-            val = scores[key]
-            shown = "nan" if _is_nan(val) else f"{val:.2f}"
-            lines.append(f"- {key}: {shown} — {_label(val)}")
+    """Turn raw RAGAS scores into plain-language lines plus a one-line verdict."""
+    lines = []
+    for metric in METRIC_ORDER:
+        value = scores.get(metric)
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            if metric in ("context_precision", "context_recall"):
+                shown, label = "n/a", "n/a (requires reference answer)"
+            else:
+                shown, label = "nan", "n/a (evaluation unavailable)"
+        elif value >= 0.80:
+            shown, label = f"{value:.2f}", "strong"
+        elif value >= 0.60:
+            shown, label = f"{value:.2f}", "acceptable (minor gaps)"
+        else:
+            shown, label = f"{value:.2f}", "weak"
+        lines.append(f"- {metric}: {shown} — {label}")
 
-    faith, rel = scores.get("faithfulness"), scores.get("answer_relevancy")
-    if _is_nan(faith) or _is_nan(rel):
-        summary = "Evaluation incomplete — treat the answer with caution."
-    elif faith >= 0.70 and rel >= 0.70:
-        summary = "Faithful and on-topic; the answer is well grounded in the sources."
+    faith = scores.get("faithfulness")
+    relevancy = scores.get("answer_relevancy")
+    faith_valid = faith is not None and not (isinstance(faith, float) and math.isnan(faith))
+    rel_valid = relevancy is not None and not (isinstance(relevancy, float) and math.isnan(relevancy))
+
+    if not faith_valid or not rel_valid:
+        summary = "Evaluation incomplete — treat answer with caution."
+    elif faith >= 0.70 and relevancy >= 0.70:
+        summary = "Faithful and on-topic; answer is well grounded."
     elif faith < 0.70:
-        summary = "Low faithfulness — the answer may contain unsupported claims."
+        summary = "Low faithfulness — answer may contain unsupported claims."
     else:
-        summary = "Low answer relevancy — may not directly address the question."
+        summary = "Low relevancy — may not directly address the question."
+
     lines.append(f"Summary: {summary}")
     return "\n".join(lines)
 
 
-def _load_metrics(with_reference: bool):
-    """Import metric classes defensively (names differ across RAGAS versions)."""
-    from ragas.metrics import Faithfulness
-
-    try:
-        from ragas.metrics import ResponseRelevancy as AnswerRel
-    except ImportError:
-        from ragas.metrics import AnswerRelevancy as AnswerRel
-
-    metrics = [Faithfulness(), AnswerRel()]
-    if with_reference:
-        from ragas.metrics import LLMContextPrecisionWithReference, LLMContextRecall
-
-        metrics += [LLMContextPrecisionWithReference(), LLMContextRecall()]
-    return metrics
-
-
-def _normalize(col: str) -> str | None:
-    """Map a RAGAS result column to our canonical metric key (robust to renames)."""
-    c = col.lower()
-    if "faith" in c:
+def normalize_column_name(column: str) -> str:
+    """Map RAGAS result columns to standard metric names."""
+    col = column.lower()
+    if "faith" in col:
         return "faithfulness"
-    if "relevanc" in c and "context" not in c:
+    if "relevanc" in col and "context" not in col:
         return "answer_relevancy"
-    if "precision" in c:
+    if "precision" in col:
         return "context_precision"
-    if "recall" in c:
+    if "recall" in col:
         return "context_recall"
     return None
 
 
-def _ensure_ragas_importable() -> None:
-    """Stub the removed `langchain_community.chat_models.vertexai` path.
+def run_ragas(question: str, answer: str, contexts: list[str], reference: str = None) -> dict:
+    """Score one answer with RAGAS. Any failure yields NaN so the graph never crashes."""
+    scores = {
+        "faithfulness": float("nan"),
+        "answer_relevancy": float("nan"),
+        "context_precision": float("nan"),
+        "context_recall": float("nan"),
+    }
 
-    RAGAS imports ChatVertexAI at module load, but langchain-community 0.4+
-    dropped that submodule. We never use Vertex, so registering a lightweight
-    stub lets `import ragas` succeed. Idempotent; no-ops if the real module exists.
-    """
-    import sys
-    import types
-
-    mod_name = "langchain_community.chat_models.vertexai"
-    if mod_name not in sys.modules:
-        try:
-            __import__(mod_name)
-        except Exception:
-            stub = types.ModuleType(mod_name)
-            stub.ChatVertexAI = type("ChatVertexAI", (), {})
-            sys.modules[mod_name] = stub
     try:
-        import langchain_community.llms as _llms
+        # Faithfulness and answer relevancy need no reference; add the context
+        # metrics only when a golden-set reference is supplied.
+        metrics = [Faithfulness(), AnswerRelevancy()]
+        if reference and HAS_REFERENCE_METRICS:
+            metrics.extend([LLMContextPrecisionWithReference(), LLMContextRecall()])
 
-        if not hasattr(_llms, "VertexAI"):
-            _llms.VertexAI = type("VertexAI", (), {})
-    except Exception:
-        pass
-
-
-def run_ragas(question, answer, contexts, reference=None) -> dict:
-    """Evaluate one sample with RAGAS. Context precision/recall run only when a
-    reference is supplied. Never raises: returns NaN (+ _error) on failure."""
-    scores = {"faithfulness": float("nan"), "answer_relevancy": float("nan")}
-    try:
-        import nest_asyncio
-
-        nest_asyncio.apply()
-        _ensure_ragas_importable()
-        from ragas import evaluate
-        from ragas.embeddings import LangchainEmbeddingsWrapper
-        from ragas.llms import LangchainLLMWrapper
-
-        try:
-            from ragas import EvaluationDataset, SingleTurnSample
-        except ImportError:
-            from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
-
-        from config import JUDGE_MODEL, make_llm
-        from rag import get_embeddings
-
-        # bypass_n: Groq's chat API rejects n>1, but answer_relevancy asks for
-        # 3 question generations. This fans them out into 3 separate n=1 calls.
         judge = LangchainLLMWrapper(make_llm(JUDGE_MODEL, max_tokens=4096), bypass_n=True)
-        embeddings = LangchainEmbeddingsWrapper(get_embeddings())
+        embeddings = LangchainEmbeddingsWrapper(RAGASEmbeddings(get_embeddings()))
+
         sample = SingleTurnSample(
             user_input=question,
             response=answer,
@@ -139,19 +122,20 @@ def run_ragas(question, answer, contexts, reference=None) -> dict:
         )
         result = evaluate(
             dataset=EvaluationDataset(samples=[sample]),
-            metrics=_load_metrics(with_reference=bool(reference)),
+            metrics=metrics,
             llm=judge,
             embeddings=embeddings,
+            run_config=RunConfig(max_workers=1, timeout=120, max_retries=2),
         )
+
         df = result.to_pandas()
-        for col in df.columns:
-            key = _normalize(col)
-            if key is not None:
-                try:
-                    scores[key] = float(df[col].mean())
-                except (TypeError, ValueError):
-                    continue
-        return scores
-    except Exception as exc:  # eval must never break the graph
-        scores["_error"] = str(exc)
-        return scores
+        for column in df.columns:
+            metric_name = normalize_column_name(column)
+            if metric_name in scores:
+                value = float(df[column].mean())
+                if not math.isnan(value):
+                    scores[metric_name] = value
+    except Exception as e:
+        logging.getLogger(__name__).warning("RAGAS evaluation failed: %s: %s", type(e).__name__, e)
+
+    return scores

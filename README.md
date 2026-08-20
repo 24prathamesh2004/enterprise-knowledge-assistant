@@ -1,202 +1,232 @@
+
+## Project Information
+
+| | |
+|---|---|
+| **Name** | Prathamesh Yogesh Bhavsar |
+| **Employee ID** | 131238 |
+| **Company** | Zensar Technologies |
+| **Submission** | L3 Agentic AI Project |
+| **Guide** | Sharad Rajore |
+| **Date** | 20 August 2026 |
+
+---
 # Enterprise Knowledge Assistant
 
-An L3 Agentic AI project: a LangGraph assistant that answers enterprise policy
-questions from a governed knowledge base, self-scores every answer with **RAGAS**,
-and actively uses a **custom MCP server** to audit interactions and escalate
-low-confidence answers to a human via a support ticket.
+An agentic policy Q&A system built on LangGraph : every answer is retrieved,
+grounded, RAGAS-scored, and audited via MCP before it reaches the user.
+Built for the L3 Agentic AI submission but designed like something you'd
+actually deploy.
 
-The flow is a linear three-agent spine — **Retrieve → Respond → Evaluate** — with
-one bonus conditional retry edge and input/groundedness **guardrails** wired in.
+Company and documents are fictional ("Northwind Technologies").
+
+---
+
+## 1. Architecture
+
+![](screenshots/architecture.png)
+
+Five nodes plus the bonus `prepare_retry`. Two branches only: the guardrail
+short-circuit and the conditional retry edge. The spine stays strictly linear
+(Retrieve -> Generate -> Evaluate).
+
+---
+
+## 2. LangGraph Design 
+
+State is a single `TypedDict` (`GraphState` in `graph.py`). The `trace` field
+uses an `operator.add` reducer so every node appends its structured log entry
+(name, inputs, outputs, duration) without touching the others.
+
+| Node | Role | Key Inputs | Key Outputs |
+|---|---|---|---|
+| `guard_input` | Input guardrail | `question` | `is_valid`, `guardrail_reason`, `top_k`, `retry_count` |
+| `retrieve` | **Retriever agent** | `question`, `top_k` | `retrieved_contexts`, `retrieved_meta` |
+| `generate` | **Response agent** | `question`, contexts | `answer` |
+| `evaluate` | **Evaluator agent** | `question`, `answer`, contexts, `reference` | `ragas_scores`, `evaluation_summary` |
+| `prepare_retry` | Broaden retrieval *(bonus)* | `retry_count`, `top_k` | `retry_count+1`, `top_k=8` |
+| `finalize` | MCP consumer | `question`, `answer`, `scores`, `is_valid` | `escalated`, `ticket_id`, `mcp_log` |
+
+**Conditional retry edge.** After `evaluate`, `decide_after_eval` routes:
+
+```python
+def decide_after_eval(state):
+    if is_low_confidence(state["ragas_scores"]) and state["retry_count"] < MAX_RETRIES:
+        return "retry"      # -> prepare_retry -> retrieve (top_k = 8)
+    return "finalize"
+```
+
+`is_low_confidence` triggers when `faithfulness < 0.70` or
+`answer_relevancy < 0.70`. `MAX_RETRIES = 1` : one retry, no infinite loops.
+The compiled graph is printed at startup so the flow is always visible.
+
+---
+
+## 3. RAG Design 
+
+**Source documents** : 10 synthetic policy `.txt` files in `knowledge_base/`:
+leave, remote work, expenses, IT security, code of conduct, onboarding,
+benefits, travel, data privacy, procurement. Fictional, self-contained,
+no licensing concerns.
+
+**Chunking** : `RecursiveCharacterTextSplitter` with:
+- `chunk_size = 800` : large enough to hold a complete policy clause
+- `chunk_overlap = 120` (~15%) : preserves context across chunk boundaries
+- Heading-aware separators (`\n## `, `\n### `, `\n\n`, `\n`, ` `) keep
+  clauses whole instead of cutting mid-sentence
+
+**Embedding model** : `all-MiniLM-L6-v2` (384-dim, normalized), run locally
+via sentence-transformers. Free, fast, fully offline after first download.
+Same model reused by RAGAS answer-relevancy so retrieval and evaluation share
+one embedding space.
+
+**Vector store** : Chroma, persistent at `.chroma/`, collection
+`enterprise_kb`. Cosine similarity, `top_k = 4` (broadened to `8` on retry).
+
+**Groundedness floor** : `retrieve_with_scores` converts Chroma's L2 distance
+to a 0–1 similarity via `1 / (1 + distance)`. Anything below **0.20**
+is flagged as insufficient context and `generate` refuses rather than
+hallucinating an answer.
+
+---
+
+## 4. RAGAS Evaluation 
+
+Mandatory metrics run on every query. Bonus context metrics run only when a
+golden-set `reference` is supplied — ad-hoc questions never fail for lacking one.
+
+| Metric | Score | Reading |
+|---|---|---|
+| Faithfulness | 1.00 | Strong : zero unsupported claims |
+| Answer relevancy | 0.94 | Strong : answer stays on topic |
+| Context precision | 0.92 | Strong *(golden set)* |
+| Context recall | 0.88 | Strong *(golden set)* |
+
+`interpret_scores()` maps each number to plain language:
+`≥ 0.80 -> strong` · `0.60–0.80 -> acceptable` · `< 0.60 -> weak`, plus a
+one-line verdict. Shown in CLI, UI, and written into the MCP audit log.
+
+**Retry logic** : `faithfulness < 0.70` or `answer_relevancy < 0.70` triggers
+one retrieval retry with `top_k = 8`. A `retry_count` cap of 1 prevents loops.
+
+**Resilience** : evaluation is `nest_asyncio`-safe and fully defensive:
+any RAGAS failure writes `NaN` to state and lets the graph finish normally.
+The graph never crashes on an eval error.
+
+**Sample terminal output:**
 
 ```
-guard_input ─▶ retrieve ─▶ generate ─▶ evaluate ─┬─(scores OK)─▶ finalize ─▶ END
-     │                         ▲                  │
-     │(invalid input)          └── prepare_retry ─┘ (low RAGAS scores, once)
-     └───────────────────────────────────────────▶ finalize (safe refusal + audit)
+node=evaluate (5241ms)
+  faithfulness:     1.00 -> strong
+  answer_relevancy: 0.94 -> strong
+  -> Faithful and on-topic; answer is well grounded in the sources.
 ```
 
-## Architecture overview
+---
 
-| Node | Role | Reads | Writes | External |
-|---|---|---|---|---|
-| `guard_input` | Input guardrail (innovation) | question | is_valid, guardrail_reason, top_k, retry_count | none |
-| `retrieve` | **Retriever agent** | question, top_k | retrieved_contexts, retrieved_meta | HF embeddings + Chroma |
-| `generate` | **Response agent** | question, contexts | answer | Groq LLM (grounded prompt) |
-| `evaluate` | **Evaluator agent** | question, answer, contexts, reference | ragas_scores, evaluation_summary | RAGAS + Groq judge |
-| `decide_after_eval` (edge) | Bonus conditional retry | ragas_scores, retry_count | routes only | none |
-| `prepare_retry` | Broaden retrieval | retry_count, top_k | retry_count+1, top_k=8 | none |
-| `finalize` | **MCP consumer** | question, answer, scores, is_valid | escalated, ticket_id, mcp_log | custom MCP server |
+## 5. MCP Integration 
 
-State is a single shared `TypedDict` (`GraphState` in `graph.py`); the `trace`
-field uses an `operator.add` reducer so every node appends a structured log entry
-(its name, inputs, outputs, and duration).
+**Server** : `mcp_server.py`: a custom `FastMCP` "Enterprise Service Desk"
+over stdio, backed by SQLite (`service_desk.db`).
 
-- **Guardrails (innovation):** `guard_input` rejects empty/oversized input and
-  obvious prompt-injection; `generate` refuses instead of hallucinating when
-  retrieval is below the relevance floor. Together they drive the "answer
-  confidently or escalate" story: a rejected or low-confidence query gets an
-  audit record **and** a human ticket via MCP.
-- **No supervisor agent.** The assignment asks to "keep the flow linear," so the
-  only branch is the bonus retry edge — a plain routing function, no
-  supervisor/router.
+| Tool | Purpose |
+|---|---|
+| `log_interaction` | Audit row for every query — always called |
+| `create_ticket` | Opens a human support ticket on low confidence or rejected input |
+| `get_recent_tickets` | Live ticket feed (used by `/stats` UI command) |
+| `get_recent_interactions` | Recent audit log (used by `/stats` UI command) |
 
-## Setup
+**Client** : `mcp_client.py` uses `langchain-mcp-adapters`'
+`MultiServerMCPClient` to spawn the server as a subprocess and load its tools.
 
-Requires Python 3.11+.
+**Which node calls it, and why** : `finalize` is the MCP consumer. It sits
+after evaluation so it has complete context: the question, answer, scores,
+and routing decision. It always calls `log_interaction` (durable audit trail)
+and conditionally calls `create_ticket` when confidence is low or input was
+rejected. This enforces the "answer confidently or escalate to a human"
+contract explicitly.
+
+**Proof from a real run:**
+
+```
+=== MCP service desk ===
+audit:  {'audit_id': 'AUD-2F099B72'}        -> normal interaction
+
+escalated → ticket TICK-9F3C2A10            -> low-confidence escalation
+```
+
+---
+
+## 6. Quick Setup
+
+Requires Python 3.11+ and a free [Groq API key](https://console.groq.com).
 
 ```bash
 python -m venv .venv
-# Windows:  .venv\Scripts\activate     |  macOS/Linux:  source .venv/bin/activate
+# Windows:   .venv\Scripts\activate
+
 pip install -r requirements.txt
+cp .env.example .env          
 
-cp .env.example .env          # then edit .env and set GROQ_API_KEY=gsk_...
-```
-
-Generation and the RAGAS judge both run on **Groq** (OpenAI GPT-OSS models), so
-**one** cloud key is needed (`GROQ_API_KEY`). Groq has no embeddings API, so
-embeddings are local (`BAAI/bge-small-en-v1.5`, ~90–130 MB, downloaded from
-HuggingFace on first run, then offline) and shared by both the vector store and
-RAGAS answer-relevancy.
-
-| Purpose | Model | Override env var |
-|---|---|---|
-| Generation (Response agent) | `openai/gpt-oss-20b` | `EKA_GEN_MODEL` |
-| RAGAS judge (Evaluator agent) | `openai/gpt-oss-120b` | `EKA_JUDGE_MODEL` |
-| Embeddings | `BAAI/bge-small-en-v1.5` | `EKA_EMBED_MODEL` |
-
-## Execution
-
-Everything runs from the repo root through a single entry point, `app.py`.
-
-```bash
-# 1. Build the vector index (one time) — persists to .chroma/
-python app.py --build-index
-
-# 2. Ask one question (prints the graph, trace, answer, scores, MCP audit id)
+python app.py --build-index   # build vector index once
 python app.py --ask "How many paid leave days do I get per year?"
-
-# 3. Evaluate the whole golden set and print an aggregate RAGAS table
-python app.py --eval
-
-# 4. Run the web UI (http://127.0.0.1:5000)
-python ui.py
-
-# 5. Tests (offline; models/RAG/MCP are faked in the smoke test)
-pytest -q
+python app.py --eval          # run RAGAS over the golden set
+python ui.py                  # web UI -> http://127.0.0.1:5000
 ```
 
-### Sample input / expected output
+| Purpose | Model | Provider | Override |
+|---|---|---|---|
+| Response agent | `gpt-oss-20b` | Groq LPU | `EKA_GEN_MODEL` |
+| RAGAS judge | `gpt-oss-120b` | Groq LPU | `EKA_JUDGE_MODEL` |
+| Embeddings | `all-MiniLM-L6-v2` | Local | `EKA_EMBED_MODEL` |
 
-Input: `How many paid leave days do I get per year?`
+> The web UI binds to `127.0.0.1` : local demo only, no authentication.
+> `.env`, `.chroma/`, and `*.db` are gitignored. No secrets committed.
 
-Expected (abridged):
+---
 
-```
-=== Answer ===
-Full-time employees are entitled to 22 days of paid annual leave per calendar
-year, accrued at 1.83 days per completed month of service. (leave-policy.md)
+## 7. What Makes This Project Different
 
-=== RAGAS evaluation ===
-- faithfulness: 0.95 — strong
-- answer_relevancy: 0.91 — strong
-Summary: Faithful and on-topic; the answer is well grounded in the sources.
+- **Voice input** : speak queries via browser Web Speech API, zero extra services or API keys.
+- **New chat** :  starts a fresh session without reloading the page.
+- **Past conversations** :  lists and restores previous sessions.
+- **Clear history** : wipes context instantly from the UI.
+- **Export as PDF** :  downloads the full session transcript as a PDF.
+- **Live MCP stats** : `/stats` shows real-time ticket and audit counts from the MCP server.
+- **Dual-model grading** : `gpt-oss-20b` generates, `gpt-oss-120b` judges. Evaluator ≠ generator.
+- **RAGAS gates the response** : low score triggers real retry (`top_k 4→8`), not just a warning.
+- **Guardrail-first** : PII, injection, empty, oversized inputs blocked before touching the LLM.
+- **Groundedness floor** : refuses to answer when context similarity < 0.20 rather than hallucinating.
+- **MCP accountability layer** : every query audited to SQLite; low confidence auto-opens a human ticket.
+- **ground_work.ipynb** , **Langsmith Observibility**
 
-=== MCP service desk ===
-audit: {'audit_id': 'AUD-1A2B3C4D'}
-```
+## 8. Project Snapshots
 
-An out-of-scope or unanswerable question instead returns a safe refusal and is
-escalated: `escalated -> ticket TICK-XXXXXXXX`.
+### 1.Chat Interface
+![1](/screenshots/eka1.png)
 
-## RAG design
+### 2. Document Retrieval
+![2](screenshots/eka2.png)
 
-- **Source:** 10 synthetic enterprise policy documents in `knowledge_base/`
-  (leave, remote work, expenses, IT security, code of conduct, onboarding,
-  benefits, travel, data privacy, procurement) for a fictional company,
-  "Northwind Technologies". Self-contained, no licensing concerns.
-- **Chunking:** `RecursiveCharacterTextSplitter`, `chunk_size=800`,
-  `chunk_overlap=120` (~15%), heading-aware separators
-  (`\n## `, `\n### `, `\n\n`, `\n`, ` `) so a policy clause stays intact.
-- **Embeddings:** `BAAI/bge-small-en-v1.5` (384-dim, normalized) via
-  `langchain-huggingface` — local, free, shared with RAGAS.
-- **Vector store:** Chroma (persistent, `.chroma/`), collection `enterprise_kb`,
-  built offline by `python app.py --build-index`.
-- **Retrieval:** cosine similarity, `top_k=4` (broadened to `8` on the bonus
-  retry). A relevance floor (`0.20`) marks weak retrieval as "insufficient
-  context" so the generator refuses rather than hallucinates.
+### 3. MCP tool via slash command
+![3](screenshots/eka3.png)
 
-## LangGraph design
+### 4. Voice input
+![4](screenshots/eka4.png)
 
-Three required agents form the spine (`retrieve`, `generate`, `evaluate`), plus
-`guard_input` (innovation) and `finalize` (MCP). The bonus conditional edge
-`decide_after_eval` retries retrieval once (broader `top_k`) when
-`faithfulness < 0.70` or `answer_relevancy < 0.70`, capped by `retry_count` to
-prevent loops. See the table above for the per-node read/write contract. The CLI
-prints the compiled graph (ASCII/mermaid) at startup so the flow is
-self-documenting. All state, nodes, edges, and graph assembly live in `graph.py`.
+### 5. FastAPI API Testing
+![5](screenshots/eka5.png)
 
-## MCP integration
+### 6. FastAPI API Testing
+![6](screenshots/eka6.png)
 
-- **Server:** `mcp_server.py` — a custom `FastMCP` "Enterprise Service Desk" over
-  stdio, backed by SQLite (`service_desk.db`). Tools: `log_interaction` (append
-  an audit row) and `create_ticket` (open a human ticket).
-- **Client:** `mcp_client.py` uses `langchain-mcp-adapters` `MultiServerMCPClient`
-  to spawn the server as a subprocess and load its tools.
-- **Active use every run:** the `finalize` node **always** calls
-  `log_interaction` (writing an audit row), and **conditionally** calls
-  `create_ticket` when the input was rejected or RAGAS stayed low after the
-  retry. The MCP server is the enterprise system-of-record the assistant writes
-  back to — auditing every interaction and opening a human ticket when
-  confidence is low.
+### 7. Langsmith Tracing
+![](screenshots/eka7.png)
 
-## RAGAS evaluation
+## 9. Special Thanks
 
-- **Mandatory:** Faithfulness, Answer Relevancy — run on every query.
-- **Bonus:** Context Precision, Context Recall — run only when a golden-set
-  reference is supplied (so arbitrary user queries never fail for lack of a
-  reference).
-- **Judge:** Groq `openai/gpt-oss-120b`; embeddings reuse the local HF model.
-- **Interpretation:** `interpret_scores()` maps each score to plain language
-  (≥0.8 strong · 0.6–0.8 acceptable · <0.6 weak) plus a one-line verdict, shown
-  in the CLI and UI and written to the MCP audit log.
-- **Aggregate:** `python app.py --eval` runs the golden set and prints per-question
-  and mean scores for all four metrics.
+This project would not have been possible without the support and guidance of the following:
 
-Evaluation is async-safe (`nest_asyncio`) and defensive: on any failure it
-records `NaN` and never crashes the graph.
-
-## Observability
-
-Two layers: a manual structured logger (`observability.py`, `@log_node`) that
-records each node's name, key inputs, key outputs, and duration into
-`state["trace"]` and stdout (guaranteed node-by-node log with no external
-account); plus optional LangSmith tracing via env vars
-(`LANGCHAIN_TRACING_V2=true`, `LANGCHAIN_API_KEY`).
-
-## Repository layout
-
-```
-app.py             single CLI entry point (--build-index | --ask | --eval)
-config.py          models, paths, thresholds, top_k, Groq LLM factory
-rag.py             loader + chunking + Chroma vector store + retriever
-graph.py           GraphState + all nodes + edges + graph assembly
-guards.py          input validation + context-sufficiency guardrails
-ragas_eval.py      RAGAS scoring + plain-language interpretation
-mcp_client.py      MCP client wiring (MultiServerMCPClient)
-mcp_server.py      custom FastMCP service-desk server (SQLite)
-observability.py   @log_node structured logger
-ui.py              Flask server (local, unauthenticated) + templates/index.html
-knowledge_base/    synthetic policy .md docs
-golden_set.json    golden eval set (question + reference + source)
-tests/test_core.py component + full-graph smoke tests
-docs/screenshots/  execution evidence
-```
-
-## Security notes
-
-- The Flask UI binds to `127.0.0.1` and has **no authentication** — it is a local
-  demo only. Do not expose it to a network without adding access controls.
-- No secrets are committed: `.env.example` only. `.gitignore` excludes `.env`,
-  virtualenvs, `.chroma/`, and `*.db`. All data and PII are fictional.
-- Strip `.env` before submitting the project.
-
+- **Instructor · Sharad Rajore** : for clear and structured L3 Agentic AI training, consistent guidance throughout the project, mentorship & support for Claude Certifications.
+- **LangChain / LangGraph Docs · LangChain & LangGraph Documentation** : the official docs were the primary reference for graph state design, node wiring, RAG pipeline construction, and MCP adapter integration.
+- **Claude Code (Anthropic) · Claude Code** : for helping build the web UI frontend, debugging RAGAS integration issues, and resolving environment and dependency errors during development.

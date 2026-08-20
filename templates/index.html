@@ -6,100 +6,513 @@
   <title>Enterprise Knowledge Assistant</title>
   <style>
     :root { --bg:#0f1117; --panel:#1a1d27; --border:#2a2e3a; --text:#e6e8ee;
-            --muted:#9aa0ad; --accent:#6d8bff; --good:#3fbf7f; --warn:#e0a83e; --bad:#e0574e; }
+            --muted:#9aa0ad; --accent:#f97316; --good:#3fbf7f; --warn:#e0a83e; --bad:#e0574e; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--text);
            font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-    .wrap { max-width:820px; margin:0 auto; padding:32px 20px 64px; }
+
+    /* Layout: sidebar + main */
+    .app { display:flex; height:100vh; overflow:hidden; }
+    .sidebar { width:270px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--border);
+               display:flex; flex-direction:column; }
+    .main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+    .chat-scroll { flex:1; overflow-y:auto; }
+
+    /* Sidebar */
+    .side-head { padding:16px; border-bottom:1px solid var(--border); }
+    .brand { font-size:15px; font-weight:600; margin:0 0 12px; }
+    .new-chat { width:100%; padding:10px; background:var(--accent); color:#fff; border:0;
+                border-radius:10px; font-size:14px; cursor:pointer; }
+    .new-chat:hover { background:#ea6a0c; }
+    .sessions { flex:1; overflow-y:auto; padding:8px; }
+    .sessions-label { padding:12px 12px 6px; font-size:11px; text-transform:uppercase;
+                      letter-spacing:.06em; color:var(--muted); }
+    .session { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:8px;
+               cursor:pointer; color:var(--muted); font-size:14px; }
+    .session:hover { background:var(--bg); }
+    .session.active { background:var(--bg); color:var(--text); }
+    .session .title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .session .del { opacity:0; border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; }
+    .session:hover .del { opacity:1; }
+    .session .del:hover { color:var(--bad); }
+    .side-foot { padding:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px; }
+    .side-foot button { width:100%; padding:9px; background:rgba(249,115,22,0.08); color:var(--text);
+                        border:1px solid rgba(249,115,22,0.35); border-radius:8px; font-size:13px; cursor:pointer; }
+    .side-foot button:hover { border-color:var(--accent); }
+
+    .wrap { max-width:820px; margin:0 auto; padding:0 20px; }
+    .chat-scroll .wrap { padding:24px 20px; }
     h1 { font-size:22px; margin:0 0 4px; }
     p.sub { color:var(--muted); margin:0 0 24px; font-size:14px; }
-    .row { display:flex; gap:10px; }
-    input { flex:1; padding:12px 14px; background:var(--panel); color:var(--text);
-            border:1px solid var(--border); border-radius:10px; font-size:15px; }
-    button { padding:12px 20px; background:var(--accent); color:#fff; border:0;
-             border-radius:10px; font-size:15px; cursor:pointer; }
-    button:disabled { opacity:.5; cursor:default; }
+
+    .composer { border-top:1px solid var(--border); background:var(--panel); padding:16px 0; }
+    .row { display:flex; gap:10px; align-items:center; }
+    input#q { flex:1; padding:12px 14px; background:var(--panel); color:var(--text);
+              border:1px solid var(--border); border-radius:10px; font-size:15px; }
+    button#go { padding:12px 20px; background:var(--accent); color:#fff; border:0;
+                border-radius:10px; font-size:15px; cursor:pointer; }
+    button#go:disabled { opacity:.5; cursor:default; }
+    button#go:hover:not(:disabled) { background:#ea6a0c; }
+    .icon-btn { width:44px; height:44px; display:flex; align-items:center; justify-content:center;
+                background:var(--panel); border:1px solid var(--border); border-radius:10px;
+                color:var(--muted); cursor:pointer; }
+    .icon-btn:hover { color:var(--text); border-color:var(--accent); }
+    #cmdBtn { font-size:20px; font-weight:700; }
+    .cmd-wrap { position:relative; display:inline-flex; }
+    .cmd-menu { position:absolute; bottom:calc(100% + 8px); left:0; min-width:230px;
+                background:var(--panel); border:1px solid var(--border); border-radius:10px;
+                padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:40; }
+    .cmd-menu button { display:block; width:100%; text-align:left; background:none; border:0;
+                       color:var(--text); padding:8px 10px; border-radius:6px; cursor:pointer; }
+    .cmd-menu button:hover { background:var(--bg); }
+    .cmd-head { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+                color:var(--muted); padding:6px 10px 4px; }
+    .cmd-name { display:block; font-size:14px; }
+    .cmd-desc { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
+    .icon-btn.listening { color:var(--bad); border-color:var(--bad); animation:pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+
+    .spinner { display:none; width:20px; height:20px; }
+    .spinner.active { display:inline-block; animation:spin 1s linear infinite; }
+    .spinner svg { width:100%; height:100%; }
+    @keyframes spin { from{transform:rotate(0);} to{transform:rotate(360deg);} }
+
     .card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
-            padding:18px 20px; margin-top:20px; }
+            padding:18px 20px; margin-top:16px; }
     .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
                color:var(--muted); margin:0 0 10px; }
     .answer { white-space:pre-wrap; line-height:1.55; }
-    .scores { display:flex; flex-wrap:wrap; gap:10px; }
-    .score { flex:1; min-width:130px; background:var(--bg); border:1px solid var(--border);
-             border-radius:10px; padding:10px 12px; }
-    .score .name { font-size:12px; color:var(--muted); }
-    .score .val { font-size:20px; font-weight:600; }
+    .answer strong { font-weight:600; }
+    .answer code { font-family:ui-monospace,Consolas,monospace; background:var(--bg);
+                   padding:1px 5px; border-radius:4px; font-size:.9em; }
+    .sources { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:14px; }
+    .src-label { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+    .chat-item { margin-bottom:24px; }
+    .card.question { display:flex; gap:12px; align-items:flex-start;
+                     background:rgba(249,115,22,0.08); border-color:rgba(249,115,22,0.35); }
+    .avatar { width:30px; height:30px; flex-shrink:0; border-radius:50%; background:var(--accent);
+              color:#fff; display:flex; align-items:center; justify-content:center; }
+    .q-body { flex:1; }
+
+    .scores { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
+    .score { background:var(--bg); border:1px solid var(--border); border-radius:10px;
+             padding:12px 14px; text-align:center; }
+    .score .name { font-size:11px; color:var(--muted); text-transform:uppercase;
+                   letter-spacing:.5px; margin-bottom:4px; }
+    .score .val { font-size:18px; font-weight:600; margin-bottom:2px; }
+    .score .desc { font-size:10px; color:var(--muted); }
     .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
-    .summary { color:var(--muted); font-size:14px; margin-top:12px; }
+    .summary { color:var(--muted); font-size:14px; margin-top:12px; padding:8px;
+               background:var(--bg); border-radius:6px; }
+
     .chips { display:flex; flex-wrap:wrap; gap:6px; }
     .chip { font-size:12px; background:var(--bg); border:1px solid var(--border);
             border-radius:20px; padding:4px 12px; color:var(--muted); }
-    .escalation { border-color:var(--warn); color:var(--warn); }
-    .hidden { display:none; }
+    .escalation { border-color:var(--warn); }
+    .escalation h2 { color:var(--warn); }
+
+    .progress { margin:0 0 12px; padding:12px; background:var(--bg);
+                border:1px solid var(--border); border-radius:8px; }
+    .progress-text { color:var(--muted); font-size:14px; }
+    .progress-bar { height:4px; background:var(--border); border-radius:2px; margin-top:8px; overflow:hidden; }
+    .progress-fill { height:100%; width:0; background:var(--accent); transition:width .3s ease; }
+
+    .empty { color:var(--muted); text-align:center; margin-top:80px; font-size:14px; }
+    .hidden { display:none !important; }
+    .menu-btn { display:none; }
+    @media (max-width:720px) {
+      .sidebar { position:fixed; left:0; top:0; bottom:0; z-index:30; transform:translateX(-100%);
+                 transition:transform .2s ease; }
+      .sidebar.open { transform:translateX(0); }
+      .menu-btn { display:flex; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Enterprise Knowledge Assistant</h1>
-    <p class="sub">Ask about company policies. Answers are grounded in the knowledge base, scored with RAGAS, and audited via MCP.</p>
-
-    <div class="row">
-      <input id="q" placeholder="How many paid leave days do I get per year?" autofocus />
-      <button id="go">Ask</button>
-    </div>
-
-    <div id="out" class="hidden">
-      <div class="card"><h2>Answer</h2><div id="answer" class="answer"></div></div>
-      <div class="card">
-        <h2>RAGAS evaluation</h2>
-        <div id="scores" class="scores"></div>
-        <div id="summary" class="summary"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head">
+        <p class="brand">Enterprise Knowledge Assistant</p>
+        <button class="new-chat" id="newChat">+ New chat</button>
       </div>
-      <div id="escCard" class="card escalation hidden"><h2>Escalation</h2><div id="esc"></div></div>
-      <div class="card"><h2>Execution trace</h2><div id="trace" class="chips"></div></div>
-    </div>
+      <div class="sessions-label">Past conversations</div>
+      <div class="sessions" id="sessions"></div>
+      <div class="side-foot">
+        <button id="exportPdf">Export chat to PDF</button>
+        <button class="danger" id="clearAll">Clear all history</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="chat-scroll" id="chatScroll">
+        <div class="wrap">
+          <div class="chat-history" id="chatHistory"></div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="wrap">
+          <div id="progress" class="progress hidden">
+            <div class="progress-text" id="progressText">Processing your request...</div>
+            <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+          </div>
+          <div class="row">
+            <button class="icon-btn menu-btn" id="menuBtn" title="Menu">&#9776;</button>
+            <input id="q" placeholder="How many paid leave days do I get per year?" autofocus />
+            <span class="cmd-wrap">
+              <button class="icon-btn" id="cmdBtn" title="Commands">/</button>
+              <div id="cmdMenu" class="cmd-menu hidden">
+                <div class="cmd-head">Tools</div>
+                <button data-cmd="/about"><span class="cmd-name">/about</span><span class="cmd-desc">what this assistant is</span></button>
+                <button data-cmd="/stats"><span class="cmd-name">/stats</span><span class="cmd-desc">Live ticket &amp; activity count</span></button>
+              </div>
+            </span>
+            <button class="icon-btn" id="mic" title="Voice input">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+              </svg>
+            </button>
+            <button id="go">Ask</button>
+            <div class="spinner" id="spinner">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" opacity="0.25"/>
+                <path d="M12 2a10 10 0 0 1 10 10" opacity="0.75"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const cls = (v) => v == null ? "" : v >= 0.8 ? "good" : v >= 0.6 ? "warn" : "bad";
+    const cls = (v) => v == null ? "bad" : v >= 0.8 ? "good" : v >= 0.6 ? "warn" : "bad";
     const fmt = (v) => v == null ? "n/a" : v.toFixed(2);
+    // The model replies in light markdown; render bold and inline code, escape the rest.
+    const mdFormat = (text) => (text || "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`]+?)`/g, "<code>$1</code>");
+    // Pull the "(file.md)" citations out of the answer so they show as separate source tags.
+    const splitSources = (text) => {
+      const sources = [];
+      const body = (text || "")
+        .replace(/\(([^()]*\.(?:md|pdf|txt|docx|csv|json))\)/gi, (_, list) => {
+          list.split(/[,;]\s*/).forEach((f) => {
+            const name = f.trim();
+            if (name && !sources.includes(name)) sources.push(name);
+          });
+          return "";
+        })
+        .replace(/[ \t]+([.,])/g, "$1")
+        .replace(/[ \t]+$/gm, "")
+        .trim();
+      return { body, sources };
+    };
+    const metricInfo = {
+      faithfulness: "How well grounded the answer is in the retrieved context",
+      answer_relevancy: "How relevant the answer is to the question asked",
+    };
+
+    // Slash commands: a light touch of the MCP service-desk layer, typed in the chat box.
+    const HELP_TEXT =
+      "**Commands**\n" +
+      "`/help` — show this list\n" +
+      "`/about` — what this assistant is\n" +
+      "`/stats` — live service-desk numbers\n\n" +
+      "Ask anything else in plain English to search the knowledge base.";
+    const ABOUT_TEXT =
+      "**Enterprise Knowledge Assistant**\n" +
+      "Answers questions from internal company documents, grounded in the source text " +
+      "and scored for faithfulness before replying. Low-confidence answers are escalated " +
+      "to a human ticket.\n\n" +
+      "Built with LangGraph, retrieval-augmented generation, RAGAS evaluation, and an MCP service desk.";
+
+    const SESSIONS_KEY = "eka_sessions";
+    const ACTIVE_KEY = "eka_active";
+    let sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]");
+    let activeId = localStorage.getItem(ACTIVE_KEY);
+
+    const save = () => {
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+      localStorage.setItem(ACTIVE_KEY, activeId);
+    };
+    const active = () => sessions.find((s) => s.id === activeId);
+    const scrollToBottom = () => { const el = $("chatScroll"); el.scrollTop = el.scrollHeight; };
+
+    function newChat() {
+      const session = { id: crypto.randomUUID(), title: "New chat", createdAt: Date.now(), messages: [] };
+      sessions.unshift(session);
+      activeId = session.id;
+      save();
+      renderSidebar();
+      renderChat();
+      $("q").focus();
+    }
+
+    function switchTo(id) {
+      activeId = id;
+      save();
+      renderSidebar();
+      renderChat();
+      $("sidebar").classList.remove("open");
+    }
+
+    function deleteSession(id) {
+      sessions = sessions.filter((s) => s.id !== id);
+      if (activeId === id) activeId = sessions[0]?.id || null;
+      if (!sessions.length) return newChat();
+      save();
+      renderSidebar();
+      renderChat();
+    }
+    function clearAll() {
+      if (!confirm("Delete all conversations?")) return;
+      sessions = [];
+      activeId = null;
+      localStorage.removeItem(SESSIONS_KEY);
+      localStorage.removeItem(ACTIVE_KEY);
+      newChat();
+    }
+
+    function renderSidebar() {
+      $("sessions").innerHTML = sessions.map((s) => `
+        <div class="session ${s.id === activeId ? "active" : ""}" data-id="${s.id}">
+          <span class="title">${s.title}</span>
+          <button class="del" data-del="${s.id}" title="Delete">&times;</button>
+        </div>
+      `).join("");
+    }
+
+    function renderChat() {
+      const messages = active()?.messages || [];
+      if (!messages.length) {
+        $("chatHistory").innerHTML = `<div class="empty">Ask a question to get started.</div>`;
+        return;
+      }
+      $("chatHistory").innerHTML = messages.map((item, index) => {
+        if (item.command) return `
+          <div class="chat-item">
+            <div class="card question">
+              <div class="avatar">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="8" r="4"/>
+                  <path d="M4 21v-1a7 7 0 0 1 14 0v1"/>
+                </svg>
+              </div>
+              <div class="q-body"><h2>Command</h2><div class="answer">${mdFormat(item.question)}</div></div>
+            </div>
+            <div class="card"><div class="answer">${mdFormat(item.body)}</div></div>
+          </div>`;
+        return `
+        <div class="chat-item">
+          <div class="card question">
+            <div class="avatar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="8" r="4"/>
+                <path d="M4 21v-1a7 7 0 0 1 14 0v1"/>
+              </svg>
+            </div>
+            <div class="q-body">
+              <h2>Question ${index + 1}</h2>
+              <div class="answer">${item.question}</div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Answer</h2>
+            ${(() => {
+              const s = splitSources(item.answer);
+              return `<div class="answer">${mdFormat(s.body) || "(no answer)"}</div>` +
+                (s.sources.length ? `<div class="sources"><span class="src-label">Sources</span>${s.sources.map((f) => `<span class="chip">${f}</span>`).join("")}</div>` : "");
+            })()}
+          </div>
+          <div class="card">
+            <h2>RAGAS Evaluation</h2>
+            <div class="scores">
+              ${Object.entries(item.scores || {})
+                .filter(([k]) => k === "faithfulness" || k === "answer_relevancy")
+                .map(([k, v]) => `
+                  <div class="score">
+                    <div class="name">${k.replace("_", " ")}</div>
+                    <div class="val ${cls(v)}">${fmt(v)}</div>
+                    <div class="desc">${metricInfo[k] || ""}</div>
+                  </div>
+                `).join("")}
+            </div>
+            <div class="summary">${(item.evaluation_summary || "").split("Summary:").pop().trim()}</div>
+          </div>
+          ${item.escalated ? `
+            <div class="card escalation">
+              <h2>Escalation</h2>
+              <div>Low-confidence query escalated to a human — ticket ${item.ticket_id}.</div>
+            </div>` : ""}
+          <div class="card">
+            <h2>Execution Trace</h2>
+            <div class="chips">${(item.trace || []).map((n) => `<span class="chip">${n}</span>`).join("")}</div>
+          </div>
+        </div>
+      `;
+      }).join("");
+      scrollToBottom();
+    }
+    let currentRequest = null;
+    function simulateProgress() {
+      const steps = [
+        [10, "Validating input..."], [25, "Retrieving relevant documents..."],
+        [50, "Generating response..."], [75, "Evaluating with RAGAS..."],
+        [90, "Finalizing audit log..."], [100, "Complete!"],
+      ];
+      let i = 0;
+      const interval = setInterval(() => {
+        if (i >= steps.length || !currentRequest) return clearInterval(interval);
+        $("progressFill").style.width = steps[i][0] + "%";
+        $("progressText").textContent = steps[i][1];
+        i++;
+      }, 1500);
+      return interval;
+    }
 
     async function ask() {
       const question = $("q").value.trim();
-      if (!question) return;
-      $("go").disabled = true; $("go").textContent = "Thinking…";
+      if (!question || currentRequest) return;
+      const session = active();
+
+      if (question.startsWith("/")) return runCommand(question, session);
+
+      $("go").disabled = true;
+      $("go").textContent = "Processing...";
+      $("spinner").classList.add("active");
+      $("progress").classList.remove("hidden");
+      currentRequest = true;
+      const progress = simulateProgress();
+
       try {
         const res = await fetch("/ask", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question }),
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question, session_id: session.id }),
         });
         const data = await res.json();
-        $("answer").textContent = data.answer || "(no answer)";
-        $("scores").innerHTML = Object.entries(data.scores || {})
-          .filter(([k]) => !k.startsWith("_"))
-          .map(([k, v]) => `<div class="score"><div class="name">${k}</div>
-            <div class="val ${cls(v)}">${fmt(v)}</div></div>`).join("");
-        $("summary").textContent = data.evaluation_summary || "";
-        if (data.escalated) {
-          $("escCard").classList.remove("hidden");
-          $("esc").textContent = `Low-confidence query escalated to a human — ticket ${data.ticket_id}.`;
-        } else {
-          $("escCard").classList.add("hidden");
-        }
-        $("trace").innerHTML = (data.trace || [])
-          .map((n) => `<span class="chip">${n}</span>`).join("");
-        $("out").classList.remove("hidden");
+        session.messages.push({ question, ...data, timestamp: new Date().toISOString() });
       } catch (e) {
-        $("answer").textContent = "Request failed: " + e;
-        $("out").classList.remove("hidden");
+        session.messages.push({ question, answer: "Request failed: " + e.message, scores: {}, trace: ["error"] });
       } finally {
-        $("go").disabled = false; $("go").textContent = "Ask";
+        if (session.title === "New chat") session.title = question.slice(0, 40);
+        save();
+        renderSidebar();
+        renderChat();
+        $("q").value = "";
+        currentRequest = null;
+        clearInterval(progress);
+        $("go").disabled = false;
+        $("go").textContent = "Ask";
+        $("spinner").classList.remove("active");
+        $("progress").classList.add("hidden");
+        $("progressFill").style.width = "0";
       }
     }
 
+    async function runCommand(text, session) {
+      const name = text.split(/\s+/)[0].toLowerCase();
+      const turn = { question: text, command: true };
+      if (name === "/help") {
+        turn.body = HELP_TEXT;
+      } else if (name === "/about") {
+        turn.body = ABOUT_TEXT;
+      } else if (name === "/stats") {
+        try {
+          const res = await fetch("/stats");
+          const d = await res.json();
+          turn.body = `**Service desk**\n${d.interactions} question(s) answered · ${d.open_tickets} open ticket(s)`;
+        } catch (e) {
+          turn.body = "Could not reach the service desk right now.";
+        }
+      } else {
+        turn.body = `Unknown command \`${name}\`. Type **/help** for the list.`;
+      }
+      session.messages.push(turn);
+      if (session.title === "New chat") session.title = text.slice(0, 40);
+      save();
+      renderSidebar();
+      renderChat();
+      $("q").value = "";
+    }
+
+    // Voice input via the browser's Web Speech API (Chrome/Edge).
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognizer = null, listening = false;
+    if (SpeechRecognition) {
+      recognizer = new SpeechRecognition();
+      recognizer.lang = "en-US";
+      recognizer.interimResults = false;
+      recognizer.onresult = (e) => { $("q").value = e.results[0][0].transcript; };
+      recognizer.onend = () => { listening = false; $("mic").classList.remove("listening"); };
+    } else {
+      $("mic").classList.add("hidden");
+    }
+    function toggleMic() {
+      if (!recognizer) return;
+      if (listening) return recognizer.stop();
+      listening = true;
+      $("mic").classList.add("listening");
+      recognizer.start();
+    }
+
+    async function exportPdf() {
+      const session = active();
+      if (!session || !session.messages.length) return alert("Nothing to export yet.");
+      const messages = [];
+      for (const m of session.messages) {
+        if (m.command) continue;
+        messages.push({ type: "user", content: m.question, timestamp: m.timestamp || "" });
+        messages.push({
+          type: "assistant", content: m.answer || "", timestamp: m.timestamp || "",
+          metrics: m.scores || {}, escalation: m.escalated ? m.ticket_id : null,
+        });
+      }
+      const res = await fetch("/export-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages, session_title: session.title, session_date: new Date().toLocaleDateString() }),
+      });
+      if (!res.ok) return alert("PDF export failed.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "chat_export.pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     $("go").addEventListener("click", ask);
-    $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+    $("cmdBtn").addEventListener("click", (e) => { e.stopPropagation(); $("cmdMenu").classList.toggle("hidden"); });
+    $("cmdMenu").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-cmd]");
+      if (!btn) return;
+      $("cmdMenu").classList.add("hidden");
+      runCommand(btn.dataset.cmd, active());
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".cmd-wrap")) $("cmdMenu").classList.add("hidden");
+    });
+    $("q").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
+    $("newChat").addEventListener("click", newChat);
+    $("mic").addEventListener("click", toggleMic);
+    $("exportPdf").addEventListener("click", exportPdf);
+    $("clearAll").addEventListener("click", clearAll);
+    $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+    $("sessions").addEventListener("click", (e) => {
+      const del = e.target.closest("[data-del]");
+      if (del) { deleteSession(del.dataset.del); return; }
+      const row = e.target.closest(".session");
+      if (row) switchTo(row.dataset.id);
+    });
+
+    if (!sessions.length || !active()) newChat();
+    else { renderSidebar(); renderChat(); }
   </script>
 </body>
 </html>

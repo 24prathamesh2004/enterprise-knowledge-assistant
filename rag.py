@@ -1,19 +1,13 @@
-"""RAG pipeline: load Markdown policies, chunk them, embed locally, persist to
-Chroma, and retrieve the most relevant chunks for a question.
+"""RAG pipeline using LangChain components."""
 
-`build_index()` is the one-time offline step; `retrieve()` is the runtime step
-the graph's Retriever node calls on every query.
-"""
-from __future__ import annotations
-
+import os
 import re
-from functools import lru_cache
-
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.embeddings import Embeddings
+from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from config import (
     CHROMA_COLLECTION,
     CHROMA_DIR,
@@ -24,91 +18,118 @@ from config import (
     TOP_K,
 )
 
-# Split on headings first so a policy clause stays intact, then paragraphs/lines.
-_SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", " "]
-_HEADING_RE = re.compile(r"^#{1,3}\s+(.*)$", re.MULTILINE)
+SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", " "]
+HEADING_PATTERN = re.compile(r"^#{1,3}\s+(.*)$", re.MULTILINE)
+
+embeddings_instance = None
+vector_store_instance = None
+
+
+class LocalEmbeddings(Embeddings):
+    """Sentence-transformers embeddings loaded locally, without HuggingFace auth."""
+
+    def __init__(self, model_name: str):
+        # An expired HF token in the environment breaks the local model load.
+        os.environ.pop("HF_TOKEN", None)
+        os.environ.pop("HUGGINGFACE_TOKEN", None)
+        self.model = SentenceTransformer(model_name, use_auth_token=False)
+        self.model_name = model_name  # RAGAS reads this attribute directly
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.model.encode(texts, normalize_embeddings=True).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode(text, normalize_embeddings=True).tolist()
+
+
+def get_embeddings() -> Embeddings:
+    """Get singleton embeddings instance using local-only approach."""
+    global embeddings_instance
+    if embeddings_instance is None:
+        embeddings_instance = LocalEmbeddings(EMBED_MODEL)
+    return embeddings_instance
+
+
+def get_vector_store() -> Chroma:
+    """Get singleton vector store instance."""
+    global vector_store_instance
+    if vector_store_instance is None:
+        vector_store_instance = Chroma(
+            collection_name=CHROMA_COLLECTION,
+            embedding_function=get_embeddings(),
+            persist_directory=str(CHROMA_DIR),
+        )
+    return vector_store_instance
 
 
 def load_documents() -> list[Document]:
-    """Read every Markdown file in the knowledge base into a Document."""
-    if not KNOWLEDGE_BASE_DIR.exists():
-        raise FileNotFoundError(f"Knowledge base not found: {KNOWLEDGE_BASE_DIR}")
-    docs = [
-        Document(page_content=path.read_text(encoding="utf-8"),
-                 metadata={"source": path.name})
-        for path in sorted(KNOWLEDGE_BASE_DIR.glob("*.md"))
-    ]
+    """Load every policy document from the knowledge base."""
+    loader = DirectoryLoader(
+        str(KNOWLEDGE_BASE_DIR),
+        glob="*.txt",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
+        show_progress=False,
+    )
+    docs = loader.load()
     if not docs:
-        raise FileNotFoundError(f"No .md files found in {KNOWLEDGE_BASE_DIR}")
+        raise FileNotFoundError(f"No .txt files in {KNOWLEDGE_BASE_DIR}")
     return docs
 
 
 def chunk_documents(docs: list[Document]) -> list[Document]:
-    """Split documents into overlapping chunks tagged with source/section/chunk_id."""
+    """Split documents using LangChain text splitter."""
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, separators=_SEPARATORS,
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=SEPARATORS,
     )
     chunks = splitter.split_documents(docs)
+
     for i, chunk in enumerate(chunks):
         chunk.metadata["chunk_id"] = i
-        heading = _HEADING_RE.search(chunk.page_content)
+        heading = HEADING_PATTERN.search(chunk.page_content)
         if heading:
             chunk.metadata["section"] = heading.group(1).strip()
+
     return chunks
 
 
-@lru_cache(maxsize=1)
-def get_embeddings() -> HuggingFaceEmbeddings:
-    """Local sentence-transformer embeddings, shared by the store and RAGAS.
-
-    token=False forces anonymous HF Hub access so a stale/expired token in the
-    environment can't turn this public model's download into a 401.
-    """
-    return HuggingFaceEmbeddings(
-        model_name=EMBED_MODEL,
-        model_kwargs={"token": False},
-        encode_kwargs={"normalize_embeddings": True},
-    )
-
-
 def build_index() -> int:
-    """Embed the knowledge base into a persistent Chroma collection.
-
-    Returns the number of chunks stored. Run once before querying.
-    """
-    chunks = chunk_documents(load_documents())
+    """Build vector index using LangChain."""
+    global vector_store_instance
+    
+    docs = load_documents()
+    chunks = chunk_documents(docs)
+    
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    Chroma.from_documents(
+    
+    vector_store_instance = Chroma.from_documents(
         documents=chunks,
         embedding=get_embeddings(),
         collection_name=CHROMA_COLLECTION,
         persist_directory=str(CHROMA_DIR),
     )
+    
     return len(chunks)
 
 
-@lru_cache(maxsize=1)
-def _store() -> Chroma:
-    return Chroma(
-        collection_name=CHROMA_COLLECTION,
-        embedding_function=get_embeddings(),
-        persist_directory=str(CHROMA_DIR),
-    )
+def retrieve_with_scores(question: str, top_k: int = TOP_K) -> tuple[list[str], list[dict]]:
+    """Retrieve documents with real similarity scores from Chroma."""
+    store = get_vector_store()
+    # similarity_search_with_score returns (Document, distance) pairs.
+    # Chroma uses L2 distance by default: distance=0 is perfect, higher is worse.
+    # Convert to a 0-1 similarity score: score = 1 / (1 + distance)
+    results = store.similarity_search_with_score(question, k=top_k)
 
-
-def retrieve(question: str, top_k: int = TOP_K) -> tuple[list[str], list[dict]]:
-    """Return (chunk texts, metadata) for the top_k most similar chunks.
-
-    Metadata carries source, section, and a normalized relevance score in [0, 1].
-    """
-    hits = _store().similarity_search_with_relevance_scores(question, k=top_k)
-    contexts = [doc.page_content for doc, _ in hits]
-    meta = [
+    contexts = [doc.page_content for doc, _ in results]
+    metadata = [
         {
             "source": doc.metadata.get("source", "unknown"),
             "section": doc.metadata.get("section"),
-            "score": float(score),
+            "score": round(1.0 / (1.0 + float(distance)), 4),
         }
-        for doc, score in hits
+        for doc, distance in results
     ]
-    return contexts, meta
+
+    return contexts, metadata
