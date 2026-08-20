@@ -1,4 +1,3 @@
-"""RAGAS evaluation and score interpretation."""
 
 import logging
 import math
@@ -82,7 +81,6 @@ def interpret_scores(scores: dict) -> str:
 
 
 def normalize_column_name(column: str) -> str:
-    """Map RAGAS result columns to standard metric names."""
     col = column.lower()
     if "faith" in col:
         return "faithfulness"
@@ -96,7 +94,6 @@ def normalize_column_name(column: str) -> str:
 
 
 def run_ragas(question: str, answer: str, contexts: list[str], reference: str = None) -> dict:
-    """Score one answer with RAGAS. Any failure yields NaN so the graph never crashes."""
     scores = {
         "faithfulness": float("nan"),
         "answer_relevancy": float("nan"),

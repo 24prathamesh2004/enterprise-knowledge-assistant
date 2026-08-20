@@ -1,5 +1,3 @@
-"""Configuration for the Enterprise Knowledge Assistant."""
-
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -40,7 +38,6 @@ MAX_RETRIES = 1
 
 
 def make_llm(model: str, **kwargs):
-    """Create a Groq LLM client."""
     from langchain_groq import ChatGroq
     
     if not GROQ_API_KEY:

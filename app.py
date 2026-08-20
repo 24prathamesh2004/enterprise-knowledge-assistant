@@ -1,5 +1,3 @@
-"""Main entry point for the Enterprise Knowledge Assistant."""
-
 import argparse
 import json
 from config import GOLDEN_SET_PATH
@@ -8,7 +6,6 @@ METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_rec
 
 
 def build_index():
-    """Build the vector index from knowledge base."""
     from rag import build_index as build
     num_chunks = build()
     print(f"Indexed {num_chunks} chunks into the vector store.")
@@ -41,7 +38,6 @@ def ask_question(question: str):
 
 
 def evaluate_golden_set():
-    """Evaluate all questions in the golden set."""
     from graph import build_graph
     
     items = json.loads(GOLDEN_SET_PATH.read_text(encoding="utf-8"))
@@ -71,7 +67,6 @@ def evaluate_golden_set():
 
 
 def main():
-    """Parse arguments and run the appropriate command."""
     parser = argparse.ArgumentParser(description="Enterprise Knowledge Assistant")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--build-index", action="store_true", help="Build the vector index")

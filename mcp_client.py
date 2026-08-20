@@ -1,4 +1,3 @@
-"""MCP client for the Enterprise Service Desk."""
 
 import asyncio
 import json

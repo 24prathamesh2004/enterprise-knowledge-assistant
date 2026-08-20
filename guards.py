@@ -1,4 +1,3 @@
-"""Input validation and context-sufficiency guardrails."""
 
 import re
 

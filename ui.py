@@ -1,4 +1,3 @@
-"""FastAPI UI for the Enterprise Knowledge Assistant."""
 
 import math
 import traceback
@@ -21,7 +20,6 @@ graph_instance = None
 
 
 def get_graph():
-    """Lazy load graph on first request."""
     global graph_instance
     if graph_instance is None:
         graph_instance = build_graph()
@@ -29,7 +27,6 @@ def get_graph():
 
 
 def json_safe(obj):
-    """Replace NaN with None for valid JSON."""
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
     if isinstance(obj, dict):
@@ -52,7 +49,6 @@ class ExportRequest(BaseModel):
 
 @app.post("/export-pdf")
 async def export_pdf(request: ExportRequest):
-    """Generate PDF export of chat session."""
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -131,7 +127,6 @@ class AskResponse(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve the UI page."""
     template_path = Path(__file__).parent / "templates" / "index.html"
     return HTMLResponse(content=template_path.read_text(encoding="utf-8"))
 
@@ -147,7 +142,6 @@ async def stats():
 
 @app.post("/ask", response_model=AskResponse)
 async def ask(request: QuestionRequest):
-    """Process a question through the assistant."""
     try:
         question = request.question.strip()
         graph = get_graph()

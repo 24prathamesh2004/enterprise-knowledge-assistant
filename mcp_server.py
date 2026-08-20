@@ -1,4 +1,3 @@
-"""MCP server for Enterprise Service Desk - provides audit and ticketing tools."""
 
 import json
 import sqlite3
@@ -12,14 +11,12 @@ mcp = FastMCP("service-desk")
 
 
 def get_connection():
-    """Get database connection."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_database():
-    """Initialize database tables if they don't exist."""
     with get_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
@@ -43,7 +40,6 @@ def init_database():
 
 
 def get_timestamp() -> str:
-    """Get current UTC timestamp."""
     return datetime.now(timezone.utc).isoformat()
 
 

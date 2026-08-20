@@ -1,5 +1,3 @@
-"""LangGraph assistant: guard → retrieve → generate → evaluate → finalize."""
-
 import math
 import operator
 from typing import Annotated, Optional, TypedDict
@@ -25,7 +23,6 @@ from ragas_eval import interpret_scores, run_ragas
 
 
 class GraphState(TypedDict, total=False):
-    """Shared state across all graph nodes."""
     question: str
     reference: Optional[str]
     is_valid: bool
@@ -45,7 +42,7 @@ class GraphState(TypedDict, total=False):
     trace: Annotated[list, operator.add]
 
 
-# LangChain prompt template
+
 PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("system", """You are Northwind Technologies' internal knowledge assistant.
 Answer ONLY using the provided context. If the context does not contain the answer,
@@ -242,7 +239,6 @@ def decide_after_eval(state: dict) -> str:
 
 
 def build_graph():
-    """Assemble and compile the LangGraph state machine."""
     graph = StateGraph(GraphState)
 
     graph.add_node("guard_input", guard_input)

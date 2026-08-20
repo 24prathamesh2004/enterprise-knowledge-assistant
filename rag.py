@@ -1,4 +1,3 @@
-"""RAG pipeline using LangChain components."""
 
 import os
 import re
@@ -43,7 +42,6 @@ class LocalEmbeddings(Embeddings):
 
 
 def get_embeddings() -> Embeddings:
-    """Get singleton embeddings instance using local-only approach."""
     global embeddings_instance
     if embeddings_instance is None:
         embeddings_instance = LocalEmbeddings(EMBED_MODEL)
@@ -51,7 +49,6 @@ def get_embeddings() -> Embeddings:
 
 
 def get_vector_store() -> Chroma:
-    """Get singleton vector store instance."""
     global vector_store_instance
     if vector_store_instance is None:
         vector_store_instance = Chroma(
@@ -63,7 +60,6 @@ def get_vector_store() -> Chroma:
 
 
 def load_documents() -> list[Document]:
-    """Load every policy document from the knowledge base."""
     loader = DirectoryLoader(
         str(KNOWLEDGE_BASE_DIR),
         glob="*.txt",
@@ -78,7 +74,6 @@ def load_documents() -> list[Document]:
 
 
 def chunk_documents(docs: list[Document]) -> list[Document]:
-    """Split documents using LangChain text splitter."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
@@ -96,7 +91,6 @@ def chunk_documents(docs: list[Document]) -> list[Document]:
 
 
 def build_index() -> int:
-    """Build vector index using LangChain."""
     global vector_store_instance
     
     docs = load_documents()
@@ -117,9 +111,6 @@ def build_index() -> int:
 def retrieve_with_scores(question: str, top_k: int = TOP_K) -> tuple[list[str], list[dict]]:
     """Retrieve documents with real similarity scores from Chroma."""
     store = get_vector_store()
-    # similarity_search_with_score returns (Document, distance) pairs.
-    # Chroma uses L2 distance by default: distance=0 is perfect, higher is worse.
-    # Convert to a 0-1 similarity score: score = 1 / (1 + distance)
     results = store.similarity_search_with_score(question, k=top_k)
 
     contexts = [doc.page_content for doc, _ in results]

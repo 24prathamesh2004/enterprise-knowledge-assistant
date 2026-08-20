@@ -1,4 +1,3 @@
-"""Per-node execution logging for observability."""
 
 import functools
 import logging
